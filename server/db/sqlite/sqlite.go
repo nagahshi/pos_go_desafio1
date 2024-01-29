@@ -8,7 +8,7 @@ import (
 )
 
 // NewConnDB - cria uma nova conexão com o banco de dados SQLite.
-func NewConnDB(nameDB string) (*sql.DB, error) {
+func NewConnDB(nameDB string) *sql.DB {
 	db, err := sql.Open("sqlite3", nameDB)
 	if err != nil {
 		log.Fatal(err)
@@ -20,5 +20,17 @@ func NewConnDB(nameDB string) (*sql.DB, error) {
 		log.Fatal(err)
 	}
 
-	return db, nil
+	// Certifique-se de que a tabela não exista antes de criar
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS cotacoes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			bid TEXT NOT NULL
+		)
+	`)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return db
 }
