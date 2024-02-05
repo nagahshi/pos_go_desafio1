@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"log"
 	"net/http"
 	"time"
+
+	"github.com/nagahshi/pos_go_desafio1/server/db/sqlite"
 )
 
+// main - api para consulta de cotacao atual
 func main() {
 	http.HandleFunc("/cotacao", cotacaoHandler)
 	http.ListenAndServe(":8080", nil)
@@ -20,7 +24,11 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 	// Chama a função para obter a cotação
 	cotacao, err := getCotacao(&ctxAPI)
 	if err != nil {
-		http.Error(w, "Erro ao obter a cotação", http.StatusInternalServerError)
+		if ctxAPI.Err() != nil {
+			log.Printf("[cotacaoHandler] context error timout on handler")
+		}
+
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -37,29 +45,60 @@ func getCotacao(ctx *context.Context) (string, error) {
 	// Chama a API para obter a cotação
 	req, err := http.NewRequestWithContext(apiCtx, "GET", "https://economia.awesomeapi.com.br/json/last/USD-BRL", nil)
 	if err != nil {
-		return "", fmt.Errorf("Erro ao criar requisição para a API: %v", err)
+		return "", errors.New("não foi possível buscar conversão do dolar")
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if apiCtx.Err() != nil {
-			fmt.Println("err de contexto request")
+			log.Printf("[getCotacao] context error timout on request")
+			return "", errors.New("tempo excedido")
 		}
-		return "", fmt.Errorf("Erro ao chamar a API: %v", err)
+		return "", errors.New("não foi possível buscar conversão do dolar")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API retornou status não OK: %s", resp.Status)
+		return "", errors.New("não foi possível buscar conversão do dolar")
 	}
 
-	var result map[string]map[string]interface{}
+	var result map[string]map[string]string
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
-		return "", fmt.Errorf("Erro ao decodificar resposta da API: %v", err)
+		return "", errors.New("não foi possível buscar conversão do dolar")
 	}
 
-	// registra log
+	var bid string
+	if result["USDBRL"] != nil && result["USDBRL"]["bid"] != "" {
+		bid = result["USDBRL"]["bid"]
+	}
 
-	return "", nil
+	// // registra log
+	err = newLogCotacao(bid, ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return bid, nil
+}
+
+// newLogCotacao - Registra a cotação no banco de dados SQLite
+func newLogCotacao(bid string, ctx *context.Context) error {
+	dbCtx, dbCancel := context.WithTimeout(*ctx, 10*time.Millisecond)
+	defer dbCancel()
+
+	// abre uma nova conexão SQLITE
+	db := sqlite.NewConnDB("./cotacao.db")
+	defer db.Close()
+
+	_, err := db.ExecContext(dbCtx, "INSERT INTO cotacoes (bid) VALUES (?)", bid)
+	if err != nil {
+		if dbCtx.Err() != nil {
+			log.Printf("[newLogCotacao] context error timout on register")
+			return errors.New("tempo excedido")
+		}
+		return errors.New("não foi possível registrar conversão do dolar")
+	}
+
+	return nil
 }
